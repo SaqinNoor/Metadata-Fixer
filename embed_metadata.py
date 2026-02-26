@@ -201,24 +201,31 @@ def get_timestamp(meta: dict):
 #  EXIFTOOL COMMAND BUILDER
 # ═══════════════════════════════════════════════════════════════
 
+def ts_to_exif(unix_ts: str) -> str:
+    """Convert a Unix timestamp string to ExifTool date format: YYYY:MM:DD HH:MM:SS."""
+    dt = datetime.datetime.fromtimestamp(int(unix_ts), tz=datetime.timezone.utc)
+    return dt.strftime("%Y:%m:%d %H:%M:%S")
+
+
 def build_cmd(photo: Path, timestamp: str, dry_run: bool):
-    """Build the exiftool command list to embed a Unix timestamp into a file."""
+    """Build the exiftool command list to embed a timestamp into a file."""
+    date_str = ts_to_exif(timestamp)
     is_video = photo.suffix.lower() in VIDEO_EXTENSIONS
 
     if is_video:
         tags = [
-            f"-CreateDate@={timestamp}",
-            f"-ModifyDate@={timestamp}",
-            f"-TrackCreateDate@={timestamp}",
-            f"-TrackModifyDate@={timestamp}",
-            f"-MediaCreateDate@={timestamp}",
-            f"-MediaModifyDate@={timestamp}",
+            f"-CreateDate={date_str}",
+            f"-ModifyDate={date_str}",
+            f"-TrackCreateDate={date_str}",
+            f"-TrackModifyDate={date_str}",
+            f"-MediaCreateDate={date_str}",
+            f"-MediaModifyDate={date_str}",
         ]
     else:
         tags = [
-            f"-DateTimeOriginal@={timestamp}",
-            f"-CreateDate@={timestamp}",
-            f"-ModifyDate@={timestamp}",
+            f"-DateTimeOriginal={date_str}",
+            f"-CreateDate={date_str}",
+            f"-ModifyDate={date_str}",
         ]
 
     cmd = ["exiftool"]
@@ -305,7 +312,7 @@ def main():
 
         # Format date for display
         try:
-            dt = datetime.datetime.utcfromtimestamp(int(timestamp))
+            dt = datetime.datetime.fromtimestamp(int(timestamp), tz=datetime.timezone.utc)
             dt_str = dt.strftime("%Y-%m-%d %H:%M UTC")
         except Exception:
             dt_str = f"ts={timestamp}"
