@@ -88,36 +88,82 @@ def find_json(photo: Path):
     """
     Try every known Google Takeout JSON naming variant for a given photo.
     Returns the Path of the first match, or None.
+
+    Handles:
+      - Standard:          photo.jpg.supplemental-metadata.json
+      - Duplicates:        photo.jpg.supplemental-metadata(1).json
+      - Truncated suffix:  photo.jpg.su.json  /  photo.jpg..json
+      - Double extension:  photo.jpg.jpg.supplemental-metadata.json
+      - Edited variants:   photo-edited.jpg  ->  photo.jpg.supplemental-metadata.json
+      - Bare JSON:         photo.json  (Messenger / pixel-art files)
+      - Name-truncated:    photo_very_long_name.jpg -> photo_very_long_nam.json
+      - Last-resort:       strip trailing (N) from stem, try base name
     """
     folder = photo.parent
     name   = photo.name      # e.g. "IMG_1234.jpg"
     ext    = photo.suffix    # e.g. ".jpg"
+    stem   = photo.stem      # e.g. "IMG_1234"
 
     candidates = []
 
+    # ── 1. Standard supplemental-metadata variants ──────────────────────────
     for suffix in SUPPLEMENTAL_SUFFIXES:
-        # Standard:   photo.jpg.supplemental-metadata.json
         candidates.append(folder / f"{name}{suffix}.json")
-        # Duplicates: photo.jpg.supplemental-metadata(1).json
         candidates.append(folder / f"{name}{suffix}(1).json")
         candidates.append(folder / f"{name}{suffix}(2).json")
         # Double-extension edge case: photo.jpg.jpg.supplemental-metadata.json
         candidates.append(folder / f"{name}{ext}{suffix}.json")
 
-    # Fuzzy glob fallback — catches any truncation length not listed above
+    # ── 2. Bare .json sidecar (no supplemental-metadata) ────────────────────
+    # Google Takeout sometimes exports just "photo.json" for Messenger files,
+    # pixel-art downloads, Facebook exports, etc.
+    candidates.append(folder / f"{stem}.json")
+
+    # ── 3. Fuzzy glob — catches any truncation length not listed above ───────
+    # This handles cases where the JSON name starts with the full media filename.
     try:
         safe = glob_escape(name)
         for f in folder.glob(f"{safe}*.json"):
             candidates.append(f)
-        # Also try with first 40 chars for very long filenames
         if len(name) > 40:
             safe40 = glob_escape(name[:40])
             for f in folder.glob(f"{safe40}*.json"):
                 candidates.append(f)
     except Exception:
-        pass  # unusual filenames can cause glob to fail; listed candidates still tried
+        pass
 
-    # Return first existing match (deduplicated, preserving order)
+    # ── 4. Reverse-truncation: JSON name is SHORTER than media name ──────────
+    # When filenames are very long, Google truncates the JSON sidecar name
+    # at the filesystem limit — meaning the JSON may be missing the last
+    # few characters of the stem. Try progressively shorter prefixes.
+    # e.g. "Messenger_creation_de5b...461.jpeg" -> "Messenger_creation_de5b...461.json"
+    #      "Snapinsta.app_...549930.jpg"         -> "Snapinsta.app_...54993.json"
+    if len(name) > 20:
+        try:
+            # Try dropping 1..8 chars from the end of the stem
+            for trim in range(1, 9):
+                short_stem = stem[:-trim]
+                if not short_stem:
+                    break
+                candidates.append(folder / f"{short_stem}.json")
+                safe_short = glob_escape(short_stem)
+                for f in folder.glob(f"{safe_short}*.json"):
+                    candidates.append(f)
+        except Exception:
+            pass
+
+    # ── 5. Strip -edited / (N) suffix — use base name's JSON ────────────────
+    # "photo-edited.jpg" and "photo(1).jpg" share their JSON with "photo.jpg"
+    base_stem = re.sub(r'(?:-edited|[\s_-]?\(\d+\))$', '', stem, flags=re.IGNORECASE).strip()
+    if base_stem and base_stem != stem:
+        base_name = base_stem + ext
+        for suffix in SUPPLEMENTAL_SUFFIXES:
+            candidates.append(folder / f"{base_name}{suffix}.json")
+            candidates.append(folder / f"{base_name}{suffix}(1).json")
+        # Also bare JSON for the base name
+        candidates.append(folder / f"{base_stem}.json")
+
+    # ── Deduplicate and return first existing match ──────────────────────────
     seen = set()
     for c in candidates:
         if c in seen:
